@@ -76,7 +76,8 @@ class Deepvariant < Formula
     system venv_pip, "install", "-q", "--no-build-isolation", "pysam==0.20.0"
 
     # Apple CoreML conversion support (~1.2x call_variants speedup via Neural Engine)
-    system venv_pip, "install", "-q", "coremltools"
+    # Pin to <8.0: coremltools 8.x dropped Python 3.10 support
+    system venv_pip, "install", "-q", "coremltools>=7.0,<8.0"
 
     # Re-pin NumPy (safety net)
     system venv_pip, "install", "-q", "--force-reinstall", "numpy>=1.22,<=1.24.3"
@@ -250,50 +251,21 @@ class Deepvariant < Formula
 
       REF="$DATA_DIR/ucsc.hg19.chr20.unittest.fasta"
       BAM="$DATA_DIR/NA12878_S1.chr20.10_10p1mb.bam"
-      EXAMPLES="$TMPDIR_RUN/make_examples.tfrecord@${SHARDS}.gz"
-      GVCF_RECORDS="$TMPDIR_RUN/gvcf.tfrecord@${SHARDS}.gz"
-      CV_OUTPUT="$TMPDIR_RUN/callvariantsoutput.tfrecord.gz"
       OUT_VCF="$DATA_DIR/output.vcf.gz"
       OUT_GVCF="$DATA_DIR/output.g.vcf.gz"
 
-      export TF_CPP_MIN_LOG_LEVEL=0
-      export TF2_BEHAVIOR=1
-      export TPU_ML_PLATFORM=Tensorflow
-
-      # Use Homebrew-installed binaries via the venv python
-      MAKE_EXAMPLES="$VENV_PYTHON #{libexec}/bin/make_examples"
-      CALL_VARIANTS="$VENV_PYTHON #{libexec}/bin/call_variants"
-      POSTPROCESS="$VENV_PYTHON #{libexec}/bin/postprocess_variants"
-
-      echo "***** Running make_examples *****"
-      time seq 0 $((SHARDS - 1)) | parallel -q --halt 2 --line-buffer \\
-          $MAKE_EXAMPLES \\
-              --mode calling \\
-              --ref "$REF" \\
-              --reads "$BAM" \\
-              --examples "$EXAMPLES" \\
-              --checkpoint "$MODEL_DIR" \\
-              --gvcf "$GVCF_RECORDS" \\
-              --regions "$REGION" \\
-              --track_ref_reads \\
-              --task {}
-
-      echo ""
-      echo "***** Running call_variants *****"
-      time $CALL_VARIANTS \\
-          --outfile "$CV_OUTPUT" \\
-          --examples "$EXAMPLES" \\
-          --checkpoint "$MODEL_DIR"
-
-      echo ""
-      echo "***** Running postprocess_variants (--cpus 1) *****"
-      time $POSTPROCESS \\
+      # Use run_deepvariant to ensure all required v1.9.0 flags are set correctly.
+      # Calling make_examples/call_variants directly requires --channel_list and other
+      # version-specific flags that run_deepvariant handles automatically.
+      time run_deepvariant \\
+          --model_type WGS \\
           --ref "$REF" \\
-          --infile "$CV_OUTPUT" \\
-          --outfile "$OUT_VCF" \\
-          --gvcf_outfile "$OUT_GVCF" \\
-          --nonvariant_site_tfrecord_path "$GVCF_RECORDS" \\
-          --cpus 1
+          --reads "$BAM" \\
+          --output_vcf "$OUT_VCF" \\
+          --output_gvcf "$OUT_GVCF" \\
+          --regions "$REGION" \\
+          --num_shards "$SHARDS" \\
+          --intermediate_results_dir "$TMPDIR_RUN"
 
       # ── [ 5/5 ] Results ──────────────────────────────────────────
       echo ""
